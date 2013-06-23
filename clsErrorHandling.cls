@@ -10,6 +10,34 @@ Attribute VB_Exposed = False
 Option Compare Database
 Option Explicit
 
+' Constants
+Private Const conTableName = "tblLogError3" ' Where the error details are saved
+
+' Retrieves the name of the user associated with the current thread
+Private Declare Function GetUserName Lib "advapi32.dll" Alias "GetUserNameA" ( _
+    ByVal lpBuffer As String, _
+    nSize As Long) As Long
+
+Private Sub Class_Initialize()
+    Dim strSQL As String
+    If Not DebuggingSupported() Then
+        If Not TableExists(conTableName) Then
+            ' Make the log table if compiled
+            strSQL = "CREATE TABLE " & conTableName _
+                   & " (ID AUTOINCREMENT(1, 1)," _
+                   & " ErrNumber INTEGER," _
+                   & " ErrDescription VARCHAR(255)," _
+                   & " ErrDate DATE," _
+                   & " CallingProc VARCHAR(100)," _
+                   & " NetworkUserName VARCHAR(50)," _
+                   & " ShowUser YESNO," _
+                   & " Parameters VARCHAR(255));"
+        
+            CurrentDb.Execute strSQL
+        End If
+    End If
+End Sub
+
 Public Function LogError(strCallingProc As String, Optional varParameters As Variant, _
                          Optional bolShowUser = False) As Boolean
 
@@ -51,21 +79,19 @@ On Error GoTo ErrorHandler
                          "Complete the entry, or press <Esc> to undo."
             Case Else
                 Dim rsw As New clsRecordsetWrapper
-                If rsw.OpenRecordset("tblLogError", , , , dbAppendOnly) Then
+                If rsw.OpenRecordset(conTableName, , , , dbAppendOnly) Then
                     With rsw.Recordset
                         If Not rsw.AddNew Then Exit Function
                             ![ErrNumber] = lngErrorNumber
                             ![ErrDescription] = left$(strDescription, 255)
                             ![ErrDate] = Now()
                             ![CallingProc] = strCallingProc
-                            ![UserName] = CurrentUser()
+                            ![NetworkUserName] = NetworkUserName
                             ![ShowUser] = bolShowUser
-                            ![EmployeeID] = TempVars!EmployeeID
                             ' If parameters were passed then save them here
                             If Not IsMissing(varParameters) Then
                                 ![Parameters] = left(varParameters, 255)
                             End If
-                            ![Version] = g_intAppVersion
                         LogError = rsw.Update
                     End With
                 End If
@@ -94,6 +120,69 @@ ErrorHandler:
     MsgBox strMsg, vbCritical + vbMsgBoxHelpButton, "LogError()", Err.HelpFile, Err.HelpContext
     Resume ExitHandler
     
+End Function
+
+Private Function TableExists(strTableName As String) As Boolean
+    Dim db As dao.Database
+    Dim i As Integer
+    
+    Set db = CurrentDb
+    TableExists = False
+    db.TableDefs.Refresh
+    For i = 0 To db.TableDefs.Count - 1
+        If strTableName = db.TableDefs(i).Name Then
+            'Table Exists
+            TableExists = True
+            Exit For
+        End If
+    Next i
+    Set db = Nothing
+End Function
+
+Private Function NetworkUserName() As String
+    On Error GoTo ErrorHandler
+    
+    'Purpose:   Returns the network login name.
+    Dim lngLen As Long          'Length of string.
+    Dim strUserName As String
+    Const lngcMaxFieldSize As Long = 64& 'Length of field to store this data.
+    
+    'Initialize
+    strUserName = String$(254, vbNullChar)
+    lngLen = 255&
+    
+    'API returns a non-zero value if success.
+    If GetUserName(strUserName, lngLen) <> 0& Then
+        lngLen = lngLen - 1&    'Without null termination char.
+        If lngLen > lngcMaxFieldSize Then  'Maximum field size
+            lngLen = lngcMaxFieldSize
+        End If
+        NetworkUserName = left$(strUserName, lngLen)
+    End If
+
+ExitHandler:
+    Exit Function
+    
+ErrorHandler:
+    MsgBox Err.Description
+    Resume ExitHandler
+    
+End Function
+
+Private Function HasSourceCode() As Boolean
+    On Error Resume Next
+    HasSourceCode = (CurrentDb.Properties("MDE") <> "T")
+    ' Property not found error
+    If Err = 3270 Then HasSourceCode = True
+    On Error GoTo 0
+End Function
+
+Private Function IsRuntime() As Boolean
+    IsRuntime = SysCmd(acSysCmdRuntime)
+End Function
+
+Private Function DebuggingSupported() As Boolean
+    DebuggingSupported = HasSourceCode() And Not IsRuntime()
 End Function
 
 Public Function TryToCloseObject() As Boolean
@@ -143,4 +232,3 @@ ErrorHandler:
     Resume ExitHandler
     
 End Function
-
